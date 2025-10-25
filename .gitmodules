@@ -1,3 +1,3 @@
-[submodule "submodules"]
-	path = submodules
-	url = https://github.com/haoheliu/AudioLDM
+[submodule "submodules/AudioLDM"]
+	path = submodules/AudioLDM
+	url = https://github.com/haoheliu/AudioLDM.git
