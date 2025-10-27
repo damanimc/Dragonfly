@@ -16,15 +16,17 @@ from audioldm.audio.stft import TacotronSTFT
 from audioldm.audio.tools import get_mel_from_wav
 from audioldm.audio.tools import wav_to_fbank
 from audioldm.variational_autoencoder.distributions import DiagonalGaussianDistribution
-
 from audioldm.pipeline import build_model  # your pipeline.py
-
-
 from audioldm.utils import save_wave
+
+import os
+from audioldm import text_to_audio, style_transfer, build_model, save_wave, get_time, round_up_duration, get_duration
+import argparse
 
 import argparse
 import subprocess 
-
+import re 
+import soundfile as sf
 
 def load_audio(file_path, sr=16000):
     try:
@@ -72,9 +74,9 @@ def preprocess_audio(path, device="cuda"):
     return mel
 
 # -------- Encode into latent --------
-def get_latent(mel, latent_diffusion):
+def get_latent(mel, ldm):
     mel = repeat(mel, "1 ... -> b ...", b=1)
-    enc = latent_diffusion.first_stage_model.encode(mel)
+    enc = ldm.first_stage_model.encode(mel)
     
     # if it's a distribution, sample
     if isinstance(enc, DiagonalGaussianDistribution):
@@ -82,11 +84,11 @@ def get_latent(mel, latent_diffusion):
     else:
         z = enc
     
-    return latent_diffusion.scale_factor * z
+    return ldm.scale_factor * z
 
 
 # -------- Normalized L2 distance --------
-def latent_dist(path1, path2, latent_diffusion, device="cuda"):
+def latent_dist(path1, path2, ldm, device="cuda"):
     duration=5
     fn_STFT = TacotronSTFT(
         filter_length=1024,
@@ -107,8 +109,8 @@ def latent_dist(path1, path2, latent_diffusion, device="cuda"):
     mel1 = repeat(mel1, "1 ... -> b ...", b=1)
     mel2 = mel2.unsqueeze(0).unsqueeze(0).to(device)
     mel2 = repeat(mel2, "1 ... -> b ...", b=1)
-    z1 = get_latent(mel1, latent_diffusion)
-    z2 = get_latent(mel2, latent_diffusion)
+    z1 = get_latent(mel1, ldm)
+    z2 = get_latent(mel2, ldm)
 
     # match lengths
     T = min(z1.shape[-1], z2.shape[-1])
@@ -142,23 +144,58 @@ def get_mel(path1, device="cuda"):
     mel1 = repeat(mel1, "1 ... -> b ...", b=1)
     return mel1
 
+
+def save_wave_custom(waveform, savepath, name="outwav"):
+    if type(name) is not list:
+        name = [name] * waveform.shape[0]
+
+    for i in range(waveform.shape[0]):
+        path = os.path.join(
+            savepath,
+            "%s_%s.wav"
+            % (
+                os.path.basename(name[i])
+                if (not ".wav" in name[i])
+                else os.path.basename(name[i]).split(".")[0],
+                i,
+            ),
+        )
+        print("Save audio to %s" % path)
+        sf.write(path, waveform[i, 0], samplerate=16000)
+    return path
+
 def main():
-    print("\n \nrunning main\n \n")
+    print("\n \n ...Running... \n \n")
     parser = argparse.ArgumentParser()
     parser.add_argument('--input_file',type=str)
-    parser.add_argument('--target_style',type=str ,default='dragonfly')
-    args = parser.parse_args
-    input_file=args['input_file']
-    target_style=args['target_style']
-    command = f'audioldm --mode "transfer" --file_path {input_file} -t {target_style} '
-    process = subprocess.Popen(command,shell=True)
-    
-    
+    default_transfer="trumpets"#('"demonic church"')
+    parser.add_argument('--target_style',type=str ,nargs='+', default=default_transfer)
+    args = parser.parse_args()
+    input_file=args.input_file
+    target_style=args.target_style
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    ldm = build_model(model_name="audioldm-m-full")  # loads ckpt + config
+    print("\n ...Transfering style... \n")
+    waveform = style_transfer(
+        ldm,
+        args.target_style,
+        args.input_file,
+        0.5,
+    )
+    #target_style=target_style.replace('"', '')
+    print("\n ...Style transfer complete... \n")
+    save_path = "./output"
+    waveform = waveform[:,None,:]
+    input_name=input_file.replace(".wav", "")
+    transferred_path=save_wave(waveform, save_path, name="transferred")
+
+
+    # parse path from audioldm stdout: "Save audio to ./output\transfer\..."
     original = input_file
-    transferred = ""
-    print("Loading audio files...")
+    
+    print("\n ...Loading audio files... \n")
     audio_orig = load_audio(original)
-    audio_trans = load_audio(transferred)
+    audio_trans = load_audio(transferred_path)
     if audio_orig is None or audio_trans is None:
         print("Could not load one or both audio files. Please check the file paths.")
         exit()
@@ -168,23 +205,22 @@ def main():
     # Match the lengths
     audio_orig, audio_trans = match_audio_lengths(audio_orig, audio_trans)
         
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    latent_diffusion = build_model(model_name="audioldm-m-full")  # loads ckpt + config
+   
 
-    mel_orig, mel_transferred = get_mel(original), get_mel(transferred)
+    mel_orig, mel_transferred = get_mel(original), get_mel(transferred_path)
     mel_adv = mel_orig.clone().detach().requires_grad_(True)
     optimizer = torch.optim.Adam([mel_adv], lr=1e-2)
     eps = 0.5
     max_steps = 5_000
-    stagnation_window = 200
+    stagnation_window = 20
     stagnation_threshold = 1e-5
 
     loss_history = []
 
     for step in range(max_steps):
         optimizer.zero_grad()
-        z_adv = get_latent(mel_adv, latent_diffusion)
-        z_target = get_latent(mel_transferred, latent_diffusion)
+        z_adv = get_latent(mel_adv, ldm)
+        z_target = get_latent(mel_transferred, ldm)
         loss = torch.norm(z_target - z_adv, p=2)
         loss.backward()
         optimizer.step()
@@ -205,12 +241,12 @@ def main():
                 break
 
         # decode adversarial audio
-        x_adv = latent_diffusion.decode_first_stage(get_latent(mel_adv, latent_diffusion))
-        waveform = latent_diffusion.first_stage_model.decode_to_waveform(x_adv)
+        x_adv = ldm.decode_first_stage(get_latent(mel_adv, ldm))
+        waveform = ldm.first_stage_model.decode_to_waveform(x_adv)
         waveform = waveform[:, None, :]
         save_path = "./output"
         os.makedirs(save_path, exist_ok=True)
-        save_wave(waveform, save_path, name="adversarial")
+        save_wave(waveform, save_path, name="cloaked")
 
 if __name__=="__main__":
     main()
