@@ -1,14 +1,5 @@
-''' 
-
-This code is taken from 
-https://github.com/Shawn-Shan/nightshade-release/blob/main/gen_poison.py and 
-will need to be modified to make sure that it works for audio
-
-'''
-
 
 import os
-
 import sys
 from PIL import Image
 import glob
@@ -32,15 +23,15 @@ def crop_to_square(img):
 def main():
     poison_generator = PoisonGeneration(target_concept=args.target_name, device="cuda", eps=args.eps)
     all_data_paths = glob.glob(os.path.join(args.directory, "*.p"))
-    all_imgs = [pickle.load(open(f, "rb"))['img'] for f in all_data_paths]
+    all_audio = [pickle.load(open(f, "rb"))['audio'] for f in all_data_paths]
     all_texts = [pickle.load(open(f, "rb"))['text'] for f in all_data_paths]
-    all_imgs = [Image.fromarray(img) for img in all_imgs]
+    all_audio = [Image.fromarray(img) for img in all_audio]
 
-    all_result_imgs = poison_generator.generate_all(all_imgs, args.target_name)
+    all_result_imgs = poison_generator.generate_all(all_audio, args.target_name)
     os.makedirs(args.outdir, exist_ok=True)
 
-    for idx, cur_img in enumerate(all_result_imgs):
-        cur_data = {"text": all_texts[idx], "img": cur_img}
+    for idx, cur_audio in enumerate(all_result_imgs):
+        cur_data = {"text": all_texts[idx], "audio": cur_audio}
         pickle.dump(cur_data, open(os.path.join(args.outdir, "{}.p".format(idx)), "wb"))
 
 

@@ -1,7 +1,7 @@
 import os
 import sys
 
-sys.path.append("/home/shansixioing/dos/")
+
 import torch
 from PIL import Image
 import glob
@@ -13,6 +13,15 @@ import random
 from sklearn.metrics.pairwise import cosine_similarity
 import clip
 
+import numpy as np
+import librosa
+import librosa.display
+import matplotlib.pyplot as plt
+import torch
+import torchaudio
+import torch.nn.functional as F
+from audioldm.clap.encoders import CLAPAudioEmbeddingClassifierFreev2
+from scipy import signal
 
 def crop_to_square(img):
     size = 512
@@ -81,6 +90,7 @@ class CLIP(object):
 
 def main():
     clip_model = CLIP()
+    
     data_dir = args.directory
 
     source_concept = args.concept

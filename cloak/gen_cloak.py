@@ -1,16 +1,8 @@
 import os
 import numpy as np
 import librosa
-import librosa.display
-import matplotlib.pyplot as plt
 import torch
 import torchaudio
-import torch.nn.functional as F
-from audioldm.clap.encoders import CLAPAudioEmbeddingClassifierFreev2
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-from scipy import signal
-
 from einops import repeat
 from audioldm.audio.stft import TacotronSTFT
 from audioldm.audio.tools import get_mel_from_wav
@@ -23,9 +15,7 @@ import os
 from audioldm import text_to_audio, style_transfer, build_model, save_wave, get_time, round_up_duration, get_duration
 import argparse
 
-import argparse
-import subprocess 
-import re 
+import argparse 
 import soundfile as sf
 
 def load_audio(file_path, sr=16000):
