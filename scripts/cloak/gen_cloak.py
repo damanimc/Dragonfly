@@ -1,4 +1,5 @@
 import os
+import glob
 import numpy as np
 import librosa
 import torch
@@ -11,11 +12,8 @@ from audioldm.variational_autoencoder.distributions import DiagonalGaussianDistr
 from audioldm.pipeline import build_model  # your pipeline.py
 from audioldm.utils import save_wave
 
-import os
 from audioldm import text_to_audio, style_transfer, build_model, save_wave, get_time, round_up_duration, get_duration
 import argparse
-
-import argparse 
 import soundfile as sf
 
 def load_audio(file_path, sr=16000):
@@ -154,57 +152,61 @@ def save_wave_custom(waveform, savepath, name="outwav"):
         sf.write(path, waveform[i, 0], samplerate=16000)
     return path
 
-def main():
-    print("\n \n ...Running... \n \n")
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--input_file',type=str)
-    default_transfer="trumpets"#('"demonic church"')
-    parser.add_argument('--target_style',type=str ,nargs='+', default=default_transfer)
-    args = parser.parse_args()
-    input_file=args.input_file
-    target_style=args.target_style
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    ldm = build_model(model_name="audioldm-m-full")  # loads ckpt + config
+def process_single_file(ldm, input_file, target_style, output_dir, eps=0.5, max_steps=5000):
+    """Process a single audio file through cloaking"""
+    print(f"\n{'='*60}")
+    print(f"Processing: {input_file}")
+    print(f"{'='*60}")
+    
+    # Style transfer
     print("\n ...Transfering style... \n")
     waveform = style_transfer(
         ldm,
-        args.target_style,
-        args.input_file,
+        target_style,
+        input_file,
         0.5,
     )
-    #target_style=target_style.replace('"', '')
     print("\n ...Style transfer complete... \n")
-    save_path = "./output"
-    waveform = waveform[:,None,:]
-    input_name=input_file.replace(".wav", "")
-    transferred_path=save_wave(waveform, save_path, name="transferred")
-
-
-    # parse path from audioldm stdout: "Save audio to ./output\transfer\..."
-    original = input_file
     
+    # Save transferred audio
+    save_path = os.path.join(output_dir, "transferred")
+    os.makedirs(save_path, exist_ok=True)
+    waveform = waveform[:, None, :]
+    input_basename = os.path.splitext(os.path.basename(input_file))[0]
+    
+    # Get transferred path from save_wave output
+    import glob as glob_module
+    start_time = os.path.getmtime(input_file)
+    save_wave(waveform, save_path, name=input_basename)
+    candidates = glob_module.glob(os.path.join(save_path, f"{input_basename}*.wav"))
+    transferred_path = max(candidates, key=os.path.getmtime) if candidates else None
+    
+    if transferred_path is None:
+        print(f"ERROR: Could not save transferred audio for {input_file}")
+        return False
+    
+    # Load audio files
     print("\n ...Loading audio files... \n")
-    audio_orig = load_audio(original)
+    audio_orig = load_audio(input_file)
     audio_trans = load_audio(transferred_path)
     if audio_orig is None or audio_trans is None:
-        print("Could not load one or both audio files. Please check the file paths.")
-        exit()
+        print(f"ERROR: Could not load one or both audio files for {input_file}")
+        return False
 
     print(f"Original audio shape: {audio_orig.shape}")
     print(f"Transferred audio shape: {audio_trans.shape}")
-    # Match the lengths
+    
+    # Match lengths
     audio_orig, audio_trans = match_audio_lengths(audio_orig, audio_trans)
-        
-   
-
-    mel_orig, mel_transferred = get_mel(original), get_mel(transferred_path)
+    
+    # Optimization loop
+    mel_orig = get_mel(input_file)
+    mel_transferred = get_mel(transferred_path)
     mel_adv = mel_orig.clone().detach().requires_grad_(True)
     optimizer = torch.optim.Adam([mel_adv], lr=1e-2)
-    eps = 0.5
-    max_steps = 5_000
+    
     stagnation_window = 20
     stagnation_threshold = 1e-5
-
     loss_history = []
 
     for step in range(max_steps):
@@ -221,7 +223,8 @@ def main():
         mel_adv.data = mel_orig + delta
 
         loss_history.append(loss.item())
-        print(f"Step {step+1}: Loss = {loss.item():.6f}")
+        if (step + 1) % 100 == 0:
+            print(f"Step {step+1}: Loss = {loss.item():.6f}")
 
         # automatic stopping
         if step > stagnation_window:
@@ -230,13 +233,68 @@ def main():
                 print(f"Stopping early at step {step+1}, loss stagnated")
                 break
 
-        # decode adversarial audio
-        x_adv = ldm.decode_first_stage(get_latent(mel_adv, ldm))
-        waveform = ldm.first_stage_model.decode_to_waveform(x_adv)
-        waveform = waveform[:, None, :]
-        save_path = "./output"
-        os.makedirs(save_path, exist_ok=True)
-        save_wave(waveform, save_path, name="cloaked")
+    # Decode final adversarial audio
+    x_adv = ldm.decode_first_stage(get_latent(mel_adv, ldm))
+    waveform = ldm.first_stage_model.decode_to_waveform(x_adv)
+    waveform = waveform[:, None, :]
+    
+    cloaked_path = os.path.join(output_dir, "cloaked")
+    os.makedirs(cloaked_path, exist_ok=True)
+    save_wave(waveform, cloaked_path, name=f"{input_basename}_cloaked")
+    
+    print(f"✓ Saved cloaked audio for {input_basename}")
+    return True
+
+
+def main():
+    print("\n \n ...Running... \n \n")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input_file', type=str, default=None,
+                        help='Single input audio file to process')
+    parser.add_argument('--input_dir', type=str, default=None,
+                        help='Directory of audio files to process')
+    parser.add_argument('--output_dir', type=str, default='./output',
+                        help='Output directory for cloaked audio')
+    parser.add_argument('--target_style', type=str, nargs='+', default=["trumpets"],
+                        help='Target style for style transfer')
+    parser.add_argument('--eps', type=float, default=0.5,
+                        help='Perturbation epsilon')
+    parser.add_argument('--max_steps', type=int, default=5000,
+                        help='Max optimization steps')
+    
+    args = parser.parse_args()
+    
+    # Determine input files
+    input_files = []
+    if args.input_file:
+        input_files = [args.input_file]
+    elif args.input_dir:
+        input_files = sorted(glob.glob(os.path.join(args.input_dir, "*.wav")))
+        if not input_files:
+            print(f"ERROR: No .wav files found in {args.input_dir}")
+            return
+    else:
+        print("ERROR: Provide either --input_file or --input_dir")
+        return
+    
+    print(f"Found {len(input_files)} file(s) to process")
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    ldm = build_model(model_name="audioldm-m-full")
+    
+    target_style = args.target_style if isinstance(args.target_style, str) else " ".join(args.target_style)
+    
+    # Process all files
+    successful = 0
+    for i, input_file in enumerate(input_files, 1):
+        print(f"\n[{i}/{len(input_files)}]")
+        if process_single_file(ldm, input_file, target_style, args.output_dir, 
+                              eps=args.eps, max_steps=args.max_steps):
+            successful += 1
+    
+    print(f"\n{'='*60}")
+    print(f"Completed: {successful}/{len(input_files)} files processed successfully")
+    print(f"{'='*60}")
 
 if __name__=="__main__":
     main()
