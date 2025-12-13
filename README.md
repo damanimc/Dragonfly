@@ -1,6 +1,6 @@
 # Dragonfly
 
-Dragonfly is an adversarial tool for generative audio models making audio unlearnable AI with imperceptible changes to humans.
+Dragonfly is an adversarial tool for generative audio models making audio unlearnable for diffusion models with imperceptible changes to human listeners.
 
 ## Setup
 
