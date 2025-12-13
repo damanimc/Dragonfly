@@ -1,3 +1,6 @@
 [submodule "submodules/AudioLDM"]
 	path = submodules/AudioLDM
 	url = https://github.com/haoheliu/AudioLDM.git
+[submodule "AudioLDM-with-LoRA_new"]
+	path = AudioLDM-with-LoRA_new
+	url = https://github.com/karolos1444/AudioLDM-with-LoRA_new
