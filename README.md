@@ -48,15 +48,4 @@ python scripts/cloak_hf_dataset.py --dataset karolos1444/jamendo-artist14-10s --
 This project is open source and contributions are welcome.
 If you have any ideas feel free to reach out to one of the team members.
 
-## Citation
-If you use Dragonfly in your work please cite:
 
-```
-@misc{harmonydagger2025,
-  author = {Dragonfly Team},
-  title =   title = {Dragonfly: Adversarial Audio Cloaking for Generative Models},
-  year = {2025},
-  publisher = {GitHub},
-  url = {https://github.com/damanimc/Dragonfly}
-}
-```
